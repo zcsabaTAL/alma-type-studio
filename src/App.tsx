@@ -271,7 +271,7 @@ export const App: React.FC = () => {
           </button>
           <button
             type="button"
-            className={`tab-btn ${activeTab === 'cards' ? 'is-active' : ''}`}
+            className={`tab-btn grinch-cta ${activeTab === 'cards' ? 'is-active' : ''}`}
             onClick={() => setActiveTab('cards')}
           >
             <Gift size={16} />
