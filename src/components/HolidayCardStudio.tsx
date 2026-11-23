@@ -1,11 +1,16 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   Copy,
+  CopyPlus,
   Download,
   FileCode2,
   Gift,
   ImagePlus,
   Move,
+  Palette,
+  Plus,
   RotateCcw,
   Sparkles,
   Trash2,
@@ -26,6 +31,14 @@ import {
 import { computeOpticalKerning } from '../engine/kerningEngine';
 import { deriveWeightVariantParams } from '../engine/fontExporter';
 import { RangeSlider } from './RangeSlider';
+import {
+  FESTIVE_SWATCHES,
+  STICKER_CATALOG,
+  STICKER_META_MAP,
+  StickerGraphic,
+  StickerInstance,
+  StickerKind,
+} from './HolidayStickers';
 
 interface HolidayCardStudioProps {
   fontName: string;
@@ -44,14 +57,11 @@ type CardThemeId =
 
 type CardFormatId = 'postcard' | 'story' | 'square';
 type PhotoFrameMode = 'polaroid' | 'rounded' | 'circle' | 'background';
-type MovableLayerId =
-  | 'photo'
-  | 'headline'
-  | 'subline'
-  | 'signature'
-  | 'eyes'
-  | 'hat'
-  | 'ornaments';
+type CoreLayerId = 'photo' | 'headline' | 'subline' | 'signature';
+
+type SelectionTarget =
+  | { type: 'core'; id: CoreLayerId }
+  | { type: 'sticker'; id: string };
 
 interface LayerTransform {
   x: number;
@@ -60,10 +70,15 @@ interface LayerTransform {
   rotation: number;
 }
 
+interface CoreColorOverride {
+  primary?: string;
+  secondary?: string;
+}
+
 type DragInteraction =
   | {
       kind: 'move';
-      layer: MovableLayerId;
+      target: SelectionTarget;
       startPtrX: number;
       startPtrY: number;
       origX: number;
@@ -71,7 +86,7 @@ type DragInteraction =
     }
   | {
       kind: 'scale';
-      layer: MovableLayerId;
+      target: SelectionTarget;
       centerX: number;
       centerY: number;
       startDist: number;
@@ -79,7 +94,7 @@ type DragInteraction =
     }
   | {
       kind: 'rotate';
-      layer: MovableLayerId;
+      target: SelectionTarget;
       centerX: number;
       centerY: number;
       startAngle: number;
@@ -102,14 +117,11 @@ interface CardTheme {
   decorSecondary: string;
 }
 
-const LAYER_LABELS: Record<MovableLayerId, string> = {
+const CORE_LAYER_LABELS: Record<CoreLayerId, string> = {
   photo: 'Feltöltött fotó',
   headline: 'Főcím',
   subline: 'Alcím / Poén',
   signature: 'Aláírás',
-  eyes: 'Grincs-szempár',
-  hat: 'Mikulás-sapka',
-  ornaments: 'Karácsonyi gömbök',
 };
 
 const CARD_THEMES: CardTheme[] = [
@@ -237,17 +249,14 @@ const MESSAGE_PRESETS = [
   },
 ];
 
-function createDefaultTransforms(
+function createDefaultCoreTransforms(
   formatId: CardFormatId,
   hasPhoto: boolean
-): Record<MovableLayerId, LayerTransform> {
+): Record<CoreLayerId, LayerTransform> {
   const { width: w, height: h } = CARD_FORMATS[formatId];
   if (formatId === 'story') {
     return {
       photo: { x: w * 0.5, y: h * 0.31, scale: 1.0, rotation: -3 },
-      eyes: { x: w * 0.5, y: hasPhoto ? h * 0.1 : h * 0.21, scale: 1.0, rotation: 0 },
-      hat: { x: hasPhoto ? w * 0.34 : w * 0.22, y: hasPhoto ? h * 0.14 : h * 0.3, scale: 1.1, rotation: -16 },
-      ornaments: { x: w - 135, y: 120, scale: 1.0, rotation: 0 },
       headline: { x: w * 0.5, y: hasPhoto ? h * 0.65 : h * 0.45, scale: 1.0, rotation: 0 },
       subline: { x: w * 0.5, y: hasPhoto ? h * 0.8 : h * 0.65, scale: 1.0, rotation: 0 },
       signature: { x: w * 0.5, y: h - 102, scale: 1.0, rotation: 0 },
@@ -256,24 +265,57 @@ function createDefaultTransforms(
   if (formatId === 'square') {
     return {
       photo: { x: w * 0.5, y: h * 0.29, scale: 0.92, rotation: -3 },
-      eyes: { x: w * 0.5, y: hasPhoto ? h * 0.09 : h * 0.19, scale: 1.0, rotation: 0 },
-      hat: { x: hasPhoto ? w * 0.35 : w * 0.21, y: hasPhoto ? h * 0.13 : h * 0.28, scale: 1.05, rotation: -16 },
-      ornaments: { x: w - 135, y: 118, scale: 1.0, rotation: 0 },
       headline: { x: w * 0.5, y: hasPhoto ? h * 0.65 : h * 0.45, scale: 1.0, rotation: 0 },
       subline: { x: w * 0.5, y: hasPhoto ? h * 0.8 : h * 0.66, scale: 1.0, rotation: 0 },
       signature: { x: w * 0.5, y: h - 98, scale: 1.0, rotation: 0 },
     };
   }
-  // Postcard (1200x800): when photo is uploaded, place Polaroid nicely on left and text on right!
   return {
     photo: { x: w * 0.24, y: h * 0.48, scale: 0.96, rotation: -4 },
-    eyes: { x: hasPhoto ? w * 0.68 : w * 0.5, y: h * 0.17, scale: 0.95, rotation: 0 },
-    hat: { x: hasPhoto ? w * 0.16 : w * 0.19, y: hasPhoto ? h * 0.19 : h * 0.26, scale: 1.0, rotation: -18 },
-    ornaments: { x: w - 128, y: 112, scale: 0.95, rotation: 0 },
     headline: { x: hasPhoto ? w * 0.68 : w * 0.5, y: h * 0.43, scale: hasPhoto ? 0.72 : 1.0, rotation: 0 },
     subline: { x: hasPhoto ? w * 0.68 : w * 0.5, y: h * 0.66, scale: hasPhoto ? 0.84 : 1.0, rotation: 0 },
     signature: { x: hasPhoto ? w * 0.68 : w * 0.5, y: h - 102, scale: hasPhoto ? 0.88 : 1.0, rotation: 0 },
   };
+}
+
+function createDefaultStickers(
+  formatId: CardFormatId,
+  theme: CardTheme,
+  hasPhoto: boolean
+): StickerInstance[] {
+  const { width: w, height: h } = CARD_FORMATS[formatId];
+  return [
+    {
+      id: 'st-eyes-init',
+      kind: 'grinch-eyes',
+      x: hasPhoto && formatId === 'postcard' ? w * 0.68 : w * 0.5,
+      y: formatId === 'story' ? (hasPhoto ? h * 0.1 : h * 0.21) : h * 0.17,
+      scale: 0.96,
+      rotation: 0,
+      color: theme.headlineColor,
+      accentColor: '#ffe84d',
+    },
+    {
+      id: 'st-hat-init',
+      kind: 'santa-hat',
+      x: hasPhoto && formatId === 'postcard' ? w * 0.16 : w * 0.19,
+      y: hasPhoto && formatId === 'postcard' ? h * 0.19 : h * 0.26,
+      scale: 1.0,
+      rotation: -18,
+      color: '#e02e26',
+      accentColor: '#fff8ee',
+    },
+    {
+      id: 'st-orn-init',
+      kind: 'ornaments',
+      x: w - 128,
+      y: 112,
+      scale: 0.95,
+      rotation: 0,
+      color: theme.decorAccent,
+      accentColor: theme.decorSecondary,
+    },
+  ];
 }
 
 function hashSigned(seed: number): number {
@@ -294,8 +336,6 @@ interface PositionedLine {
   }[];
 }
 
-// Convert uploaded file into a self-contained inline JPEG data URL (max 1400px)
-// so SVG -> Canvas HD PNG export works 100% cleanly without blob URL security issues.
 async function fileToInlineDataUrl(file: File): Promise<{
   dataUrl: string;
   aspect: number;
@@ -335,6 +375,49 @@ async function fileToInlineDataUrl(file: File): Promise<{
   };
 }
 
+interface ColorSwatchPickerProps {
+  label: string;
+  value: string;
+  onChange: (hex: string) => void;
+}
+
+const ColorSwatchPicker: React.FC<ColorSwatchPickerProps> = ({
+  label,
+  value,
+  onChange,
+}) => {
+  return (
+    <div className="color-picker-block">
+      <div className="color-picker-head">
+        <span className="font-name-label">{label}</span>
+        <span className="color-hex-code">{value.toUpperCase()}</span>
+      </div>
+      <div className="swatch-row">
+        {FESTIVE_SWATCHES.map((sw) => (
+          <button
+            key={sw.hex}
+            type="button"
+            className={`color-dot-btn ${value.toLowerCase() === sw.hex.toLowerCase() ? 'is-selected' : ''}`}
+            style={{ backgroundColor: sw.hex }}
+            title={sw.label}
+            aria-label={`${label}: ${sw.label}`}
+            onClick={() => onChange(sw.hex)}
+          />
+        ))}
+        <label className="custom-color-wrap" title="Egyedi szín választása">
+          <input
+            type="color"
+            className="native-color-input"
+            value={value.startsWith('#') && value.length === 7 ? value : '#ffffff'}
+            onChange={(e) => onChange(e.target.value)}
+            aria-label={`${label} egyedi szín`}
+          />
+        </label>
+      </div>
+    </div>
+  );
+};
+
 export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
   fontName,
   params,
@@ -351,8 +434,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
   const [headlineSize, setHeadlineSize] = useState(112);
   const [grinchChaos, setGrinchChaos] = useState(34);
   const [festiveColors, setFestiveColors] = useState(true);
-  const [showDecor, setShowDecor] = useState(true);
-  const [showGrinchEyes, setShowGrinchEyes] = useState(true);
+  const [showSnow, setShowSnow] = useState(true);
 
   // Uploaded Photo state
   const [uploadedPhoto, setUploadedPhoto] = useState<{
@@ -363,19 +445,42 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
   const [photoFrameMode, setPhotoFrameMode] = useState<PhotoFrameMode>('polaroid');
   const [bgScrimOpacity, setBgScrimOpacity] = useState(46);
 
-  // Interactive Layer Transforms + Selection + Drag
-  const [transforms, setTransforms] = useState<Record<MovableLayerId, LayerTransform>>(() =>
-    createDefaultTransforms('postcard', false)
+  // Per-element custom color overrides for core layers + optional custom card background
+  const [coreColors, setCoreColors] = useState<Record<CoreLayerId, CoreColorOverride>>({
+    photo: {},
+    headline: {},
+    subline: {},
+    signature: {},
+  });
+  const [customBgColor, setCustomBgColor] = useState<string | null>(null);
+
+  // Interactive Core Transforms + Dynamic Stickers
+  const [coreTransforms, setCoreTransforms] = useState<Record<CoreLayerId, LayerTransform>>(
+    () => createDefaultCoreTransforms('postcard', false)
   );
-  const [selectedLayer, setSelectedLayer] = useState<MovableLayerId | null>(null);
+  const [stickers, setStickers] = useState<StickerInstance[]>(() =>
+    createDefaultStickers('postcard', CARD_THEMES[0], false)
+  );
+  const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [dragState, setDragState] = useState<DragInteraction | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const stickerSeqRef = useRef(1);
 
   const theme = CARD_THEMES.find((t) => t.id === themeId) ?? CARD_THEMES[0];
   const format = CARD_FORMATS[formatId];
+
+  // Resolved colors (user override takes precedence over theme)
+  const resolvedHeadlineColor = coreColors.headline.primary ?? theme.headlineColor;
+  const resolvedHeadlineAlt = coreColors.headline.secondary ?? theme.headlineAltColor;
+  const resolvedSubColor = coreColors.subline.primary ?? theme.subColor;
+  const resolvedSigBg = coreColors.signature.primary ?? theme.badgeBg;
+  const resolvedSigText = coreColors.signature.secondary ?? theme.badgeText;
+  const resolvedPhotoFrame =
+    coreColors.photo.primary ??
+    (photoFrameMode === 'polaroid' ? '#faf6ee' : theme.headlineColor);
 
   const variantData = useMemo(
     () => deriveWeightVariantParams(params, weight),
@@ -398,14 +503,18 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     [variantData.params, variantOverrides, kerningStrength, manualKerning]
   );
 
+  const handleSelectTheme = (nextId: CardThemeId) => {
+    setThemeId(nextId);
+    setCustomBgColor(null);
+    setCoreColors({ photo: {}, headline: {}, subline: {}, signature: {} });
+  };
+
   const handleFormatChange = (nextFmt: CardFormatId) => {
+    const hasStickerPhoto = !!uploadedPhoto && photoFrameMode !== 'background';
     setFormatId(nextFmt);
-    setTransforms(
-      createDefaultTransforms(
-        nextFmt,
-        !!uploadedPhoto && photoFrameMode !== 'background'
-      )
-    );
+    setCoreTransforms(createDefaultCoreTransforms(nextFmt, hasStickerPhoto));
+    setStickers(createDefaultStickers(nextFmt, theme, hasStickerPhoto));
+    setSelection(null);
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -417,11 +526,11 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
       const wasEmpty = !uploadedPhoto;
       setUploadedPhoto(parsed);
       if (wasEmpty && photoFrameMode !== 'background') {
-        setTransforms(createDefaultTransforms(formatId, true));
+        setCoreTransforms(createDefaultCoreTransforms(formatId, true));
       }
-      setSelectedLayer('photo');
+      setSelection({ type: 'core', id: 'photo' });
       setStatusMsg(
-        `Fotó hozzáadva: ${parsed.name}. Húzd, méretezd vagy forgasd közvetlenül a kártyán! (A Mikulás-sapkát is ráhúzhatod!)`
+        `Fotó hozzáadva: ${parsed.name}. Bármelyik elemet mozgathatod, átméretezheted és átszínezheted!`
       );
     } catch (err) {
       setStatusMsg(
@@ -432,25 +541,97 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
 
   const handleRemovePhoto = () => {
     setUploadedPhoto(null);
-    if (selectedLayer === 'photo') setSelectedLayer(null);
-    setTransforms(createDefaultTransforms(formatId, false));
+    if (selection?.type === 'core' && selection.id === 'photo') {
+      setSelection(null);
+    }
+    setCoreTransforms(createDefaultCoreTransforms(formatId, false));
   };
 
   const handlePhotoModeChange = (mode: PhotoFrameMode) => {
     setPhotoFrameMode(mode);
     if (mode === 'background') {
-      // Center typography cleanly over full-bleed photo
-      setTransforms((prev) => ({
-        ...createDefaultTransforms(formatId, false),
+      setCoreTransforms({
+        ...createDefaultCoreTransforms(formatId, false),
         photo: { x: format.width * 0.5, y: format.height * 0.5, scale: 1.0, rotation: 0 },
-        hat: prev.hat,
-      }));
+      });
     } else if (uploadedPhoto) {
-      setTransforms(createDefaultTransforms(formatId, true));
+      setCoreTransforms(createDefaultCoreTransforms(formatId, true));
     }
   };
 
-  // Layout helper: centers every line horizontally AND vertically around (0, 0)
+  const handleAddSticker = (kind: StickerKind) => {
+    const meta = STICKER_META_MAP[kind];
+    const seq = stickerSeqRef.current++;
+    const jitterX = ((seq * 47) % 180) - 90;
+    const jitterY = ((seq * 31) % 140) - 70;
+    const newSticker: StickerInstance = {
+      id: `st-${kind}-${seq}`,
+      kind,
+      x: Math.round(format.width * 0.5 + jitterX),
+      y: Math.round(format.height * 0.42 + jitterY),
+      scale: 1.0,
+      rotation: kind === 'santa-hat' ? -14 : 0,
+      color: meta.defaultColor,
+      accentColor: meta.defaultAccent,
+    };
+    setStickers((prev) => [...prev, newSticker]);
+    setSelection({ type: 'sticker', id: newSticker.id });
+    setStatusMsg(`Hozzáadva: ${meta.label}. Húzd a helyére, méretezd vagy színezd át!`);
+  };
+
+  const handleDuplicateSelectedSticker = () => {
+    if (selection?.type !== 'sticker') return;
+    const src = stickers.find((s) => s.id === selection.id);
+    if (!src) return;
+    const seq = stickerSeqRef.current++;
+    const copy: StickerInstance = {
+      ...src,
+      id: `st-${src.kind}-${seq}`,
+      x: Math.min(format.width - 60, src.x + 48),
+      y: Math.min(format.height - 60, src.y + 36),
+    };
+    setStickers((prev) => [...prev, copy]);
+    setSelection({ type: 'sticker', id: copy.id });
+  };
+
+  const handleDeleteSelectedSticker = useCallback(() => {
+    if (selection?.type !== 'sticker') return;
+    const idToRemove = selection.id;
+    setStickers((prev) => prev.filter((s) => s.id !== idToRemove));
+    setSelection(null);
+  }, [selection]);
+
+  const handleReorderSticker = (direction: 'up' | 'down') => {
+    if (selection?.type !== 'sticker') return;
+    setStickers((prev) => {
+      const idx = prev.findIndex((s) => s.id === selection.id);
+      if (idx < 0) return prev;
+      const nextIdx = direction === 'up' ? idx + 1 : idx - 1;
+      if (nextIdx < 0 || nextIdx >= prev.length) return prev;
+      const copy = [...prev];
+      const [item] = copy.splice(idx, 1);
+      copy.splice(nextIdx, 0, item);
+      return copy;
+    });
+  };
+
+  // Delete selected sticker with Delete / Backspace key
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        selection?.type === 'sticker'
+      ) {
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        handleDeleteSelectedSticker();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleDeleteSelectedSticker, selection]);
+
   const layoutCenteredBlock = useMemo(() => {
     return (
       text: string,
@@ -571,7 +752,6 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
   const sigPillW = Math.min(safeMaxW + 48, rawSig.maxLineWidth * sigFit + 76);
   const sigPillH = sigSize * sigFit * 1.48 + 20;
 
-  // Photo box dimensions in card SVG coordinates
   const photoBox = useMemo(() => {
     if (!uploadedPhoto) return { w: 360, h: 420, imgW: 320, imgH: 320 };
     if (photoFrameMode === 'background') {
@@ -591,14 +771,27 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
       const imgH = Math.max(220, Math.min(390, Math.round(imgW / uploadedPhoto.aspect)));
       return { w: imgW + 36, h: imgH + 92, imgW, imgH };
     }
-    // rounded
     const imgW = 360;
     const imgH = Math.max(220, Math.min(440, Math.round(imgW / uploadedPhoto.aspect)));
     return { w: imgW + 16, h: imgH + 16, imgW, imgH };
   }, [format.height, format.width, photoFrameMode, uploadedPhoto]);
 
-  const getLayerHalfSize = (id: MovableLayerId): { hw: number; hh: number } => {
-    switch (id) {
+  const getTargetTransform = (target: SelectionTarget): LayerTransform | null => {
+    if (target.type === 'core') {
+      return coreTransforms[target.id];
+    }
+    const st = stickers.find((s) => s.id === target.id);
+    return st ? { x: st.x, y: st.y, scale: st.scale, rotation: st.rotation } : null;
+  };
+
+  const getTargetHalfSize = (target: SelectionTarget): { hw: number; hh: number } => {
+    if (target.type === 'sticker') {
+      const st = stickers.find((s) => s.id === target.id);
+      if (!st) return { hw: 60, hh: 60 };
+      const meta = STICKER_META_MAP[st.kind];
+      return { hw: meta.halfW, hh: meta.halfH };
+    }
+    switch (target.id) {
       case 'photo':
         return { hw: photoBox.w * 0.5, hh: photoBox.h * 0.5 };
       case 'headline':
@@ -607,16 +800,25 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
         return { hw: subBox.w * 0.5, hh: subBox.h * 0.5 };
       case 'signature':
         return { hw: sigPillW * 0.5, hh: sigPillH * 0.5 };
-      case 'eyes':
-        return { hw: 98, hh: 52 };
-      case 'hat':
-        return { hw: 76, hh: 52 };
-      case 'ornaments':
-        return { hw: 62, hh: 96 };
     }
   };
 
-  // Convert pointer client coordinates to SVG card coordinates
+  const patchTargetTransform = useCallback(
+    (target: SelectionTarget, patch: Partial<LayerTransform>) => {
+      if (target.type === 'core') {
+        setCoreTransforms((prev) => ({
+          ...prev,
+          [target.id]: { ...prev[target.id], ...patch },
+        }));
+      } else {
+        setStickers((prev) =>
+          prev.map((s) => (s.id === target.id ? { ...s, ...patch } : s))
+        );
+      }
+    },
+    []
+  );
+
   const clientToCardCoords = useCallback(
     (clientX: number, clientY: number): [number, number] | null => {
       const svg = svgRef.current;
@@ -633,16 +835,16 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     [format.height, format.width]
   );
 
-  const startMoveLayer = (e: React.PointerEvent, layer: MovableLayerId) => {
+  const startMove = (e: React.PointerEvent, target: SelectionTarget) => {
     e.stopPropagation();
     const pt = clientToCardCoords(e.clientX, e.clientY);
-    if (!pt) return;
+    const cur = getTargetTransform(target);
+    if (!pt || !cur) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    setSelectedLayer(layer);
-    const cur = transforms[layer];
+    setSelection(target);
     setDragState({
       kind: 'move',
-      layer,
+      target,
       startPtrX: pt[0],
       startPtrY: pt[1],
       origX: cur.x,
@@ -650,16 +852,16 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     });
   };
 
-  const startScaleLayer = (e: React.PointerEvent, layer: MovableLayerId) => {
+  const startScale = (e: React.PointerEvent, target: SelectionTarget) => {
     e.stopPropagation();
     const pt = clientToCardCoords(e.clientX, e.clientY);
-    if (!pt) return;
+    const cur = getTargetTransform(target);
+    if (!pt || !cur) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    const cur = transforms[layer];
     const startDist = Math.max(12, Math.hypot(pt[0] - cur.x, pt[1] - cur.y));
     setDragState({
       kind: 'scale',
-      layer,
+      target,
       centerX: cur.x,
       centerY: cur.y,
       startDist,
@@ -667,16 +869,16 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     });
   };
 
-  const startRotateLayer = (e: React.PointerEvent, layer: MovableLayerId) => {
+  const startRotate = (e: React.PointerEvent, target: SelectionTarget) => {
     e.stopPropagation();
     const pt = clientToCardCoords(e.clientX, e.clientY);
-    if (!pt) return;
+    const cur = getTargetTransform(target);
+    if (!pt || !cur) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    const cur = transforms[layer];
     const startAngle = Math.atan2(pt[1] - cur.y, pt[0] - cur.x);
     setDragState({
       kind: 'rotate',
-      layer,
+      target,
       centerX: cur.x,
       centerY: cur.y,
       startAngle,
@@ -690,73 +892,47 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
       const pt = clientToCardCoords(e.clientX, e.clientY);
       if (!pt) return;
 
-      setTransforms((prev) => {
-        const cur = prev[dragState.layer];
-        if (dragState.kind === 'move') {
-          return {
-            ...prev,
-            [dragState.layer]: {
-              ...cur,
-              x: Math.round(dragState.origX + (pt[0] - dragState.startPtrX)),
-              y: Math.round(dragState.origY + (pt[1] - dragState.startPtrY)),
-            },
-          };
-        }
-        if (dragState.kind === 'scale') {
-          const dist = Math.hypot(pt[0] - dragState.centerX, pt[1] - dragState.centerY);
-          const nextScale = Math.max(
-            0.25,
-            Math.min(3.0, dragState.origScale * (dist / dragState.startDist))
-          );
-          return {
-            ...prev,
-            [dragState.layer]: {
-              ...cur,
-              scale: Math.round(nextScale * 100) / 100,
-            },
-          };
-        }
-        // rotate
+      if (dragState.kind === 'move') {
+        patchTargetTransform(dragState.target, {
+          x: Math.round(dragState.origX + (pt[0] - dragState.startPtrX)),
+          y: Math.round(dragState.origY + (pt[1] - dragState.startPtrY)),
+        });
+      } else if (dragState.kind === 'scale') {
+        const dist = Math.hypot(pt[0] - dragState.centerX, pt[1] - dragState.centerY);
+        const nextScale = Math.max(
+          0.25,
+          Math.min(3.0, dragState.origScale * (dist / dragState.startDist))
+        );
+        patchTargetTransform(dragState.target, {
+          scale: Math.round(nextScale * 100) / 100,
+        });
+      } else {
         const angle = Math.atan2(pt[1] - dragState.centerY, pt[0] - dragState.centerX);
         const deltaDeg = ((angle - dragState.startAngle) * 180) / Math.PI;
         let nextRot = Math.round(dragState.origRotation + deltaDeg);
-        // Snap gently near 0 deg
         if (Math.abs(nextRot) <= 3) nextRot = 0;
-        return {
-          ...prev,
-          [dragState.layer]: {
-            ...cur,
-            rotation: Math.max(-180, Math.min(180, nextRot)),
-          },
-        };
-      });
+        patchTargetTransform(dragState.target, {
+          rotation: Math.max(-180, Math.min(180, nextRot)),
+        });
+      }
     },
-    [clientToCardCoords, dragState]
+    [clientToCardCoords, dragState, patchTargetTransform]
   );
 
   const handleSvgPointerUp = useCallback(() => {
     setDragState(null);
   }, []);
 
-  const updateSelectedTransform = (patch: Partial<LayerTransform>) => {
-    if (!selectedLayer) return;
-    setTransforms((prev) => ({
-      ...prev,
-      [selectedLayer]: { ...prev[selectedLayer], ...patch },
-    }));
-  };
-
   const resetAllLayouts = () => {
-    setTransforms(
-      createDefaultTransforms(
-        formatId,
-        !!uploadedPhoto && photoFrameMode !== 'background'
-      )
-    );
-    setStatusMsg('Minden elem visszaállítva az alap elrendezésre.');
+    const hasStickerPhoto = !!uploadedPhoto && photoFrameMode !== 'background';
+    setCoreTransforms(createDefaultCoreTransforms(formatId, hasStickerPhoto));
+    setStickers(createDefaultStickers(formatId, theme, hasStickerPhoto));
+    setCoreColors({ photo: {}, headline: {}, subline: {}, signature: {} });
+    setCustomBgColor(null);
+    setSelection(null);
+    setStatusMsg('Elrendezés, matricák és színek visszaállítva alapállapotra.');
   };
 
-  // Snowflakes deterministically scattered
   const snowflakes = useMemo(() => {
     const arr: { cx: number; cy: number; r: number; op: number }[] = [];
     for (let i = 0; i < 38; i++) {
@@ -778,10 +954,9 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     setHeadline(preset.headline);
     setSubline(preset.subline);
     setSignature(preset.signature);
-    setThemeId(preset.theme);
+    handleSelectTheme(preset.theme);
   };
 
-  // Clean SVG serializer that strips interactive selection chrome before exporting!
   const getCleanExportSvg = (): string | null => {
     const svgEl = svgRef.current;
     if (!svgEl) return null;
@@ -806,7 +981,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    setStatusMsg('Nyomdakész vektoros .SVG képeslap letöltve (beágyazott fotóval)!');
+    setStatusMsg('Nyomdakész vektoros .SVG képeslap letöltve!');
   };
 
   const handleDownloadPng = async () => {
@@ -866,13 +1041,13 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     }
   };
 
-  // Renders dashed bounding box + corner resize handle + top rotation lollipop for the active layer
-  const renderSelectionChrome = (layer: MovableLayerId) => {
-    if (selectedLayer !== layer) return null;
-    if (layer === 'photo' && photoFrameMode === 'background') return null;
-
-    const tr = transforms[layer];
-    const { hw, hh } = getLayerHalfSize(layer);
+  const renderSelectionChrome = (target: SelectionTarget) => {
+    if (target.type === 'core' && target.id === 'photo' && photoFrameMode === 'background') {
+      return null;
+    }
+    const tr = getTargetTransform(target);
+    if (!tr) return null;
+    const { hw, hh } = getTargetHalfSize(target);
     const pad = 12;
     const w = (hw + pad) * 2;
     const h = (hh + pad) * 2;
@@ -897,8 +1072,6 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
           strokeDasharray={`${8 * invS} ${6 * invS}`}
           pointerEvents="none"
         />
-
-        {/* Rotation stem & lollipop handle (top center) */}
         <line
           x1={0}
           y1={-h * 0.5}
@@ -916,10 +1089,8 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
           stroke="#0b0c10"
           strokeWidth={2.5 * invS}
           className="card-handle-rotate"
-          onPointerDown={(e) => startRotateLayer(e, layer)}
+          onPointerDown={(e) => startRotate(e, target)}
         />
-
-        {/* Resize corner handle (bottom-right) */}
         <rect
           x={w * 0.5 - handleR}
           y={h * 0.5 - handleR}
@@ -930,10 +1101,8 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
           stroke="#0b0c10"
           strokeWidth={2.5 * invS}
           className="card-handle-scale"
-          onPointerDown={(e) => startScaleLayer(e, layer)}
+          onPointerDown={(e) => startScale(e, target)}
         />
-
-        {/* Mirror resize corner handle (bottom-left) */}
         <rect
           x={-w * 0.5 - handleR}
           y={h * 0.5 - handleR}
@@ -944,13 +1113,43 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
           stroke="#0b0c10"
           strokeWidth={2.5 * invS}
           className="card-handle-scale"
-          onPointerDown={(e) => startScaleLayer(e, layer)}
+          onPointerDown={(e) => startScale(e, target)}
         />
       </g>
     );
   };
 
-  const activeTransform = selectedLayer ? transforms[selectedLayer] : null;
+  const selectedTransform = selection ? getTargetTransform(selection) : null;
+  const selectedSticker =
+    selection?.type === 'sticker'
+      ? stickers.find((s) => s.id === selection.id) ?? null
+      : null;
+
+  const selectedLabel = selection
+    ? selection.type === 'core'
+      ? CORE_LAYER_LABELS[selection.id]
+      : selectedSticker
+        ? STICKER_META_MAP[selectedSticker.kind].label
+        : 'Matrica'
+    : null;
+
+  const updateSelectedStickerColor = (field: 'color' | 'accentColor', hex: string) => {
+    if (selection?.type !== 'sticker') return;
+    setStickers((prev) =>
+      prev.map((s) => (s.id === selection.id ? { ...s, [field]: hex } : s))
+    );
+  };
+
+  const updateCoreColor = (
+    id: CoreLayerId,
+    field: 'primary' | 'secondary',
+    hex: string
+  ) => {
+    setCoreColors((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: hex },
+    }));
+  };
 
   return (
     <section className="card-studio-shell" aria-label="Karácsonyi Grincs Üdvözlőlap Stúdió">
@@ -995,12 +1194,12 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
               onPointerMove={handleSvgPointerMove}
               onPointerUp={handleSvgPointerUp}
               onPointerCancel={handleSvgPointerUp}
-              onClick={() => setSelectedLayer(null)}
+              onClick={() => setSelection(null)}
             >
               <defs>
                 <linearGradient id={`bg-${theme.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor={theme.bgStart} />
-                  <stop offset="100%" stopColor={theme.bgEnd} />
+                  <stop offset="0%" stopColor={customBgColor ?? theme.bgStart} />
+                  <stop offset="100%" stopColor={customBgColor ?? theme.bgEnd} />
                 </linearGradient>
                 <radialGradient id="festive-glow" cx="50%" cy="42%" r="60%">
                   <stop offset="0%" stopColor="rgba(255,255,255,0.14)" />
@@ -1037,8 +1236,8 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
               {uploadedPhoto && photoFrameMode === 'background' && (
                 <g
                   className="card-draggable-layer"
-                  transform={`translate(${transforms.photo.x}, ${transforms.photo.y}) rotate(${transforms.photo.rotation}) scale(${transforms.photo.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'photo')}
+                  transform={`translate(${coreTransforms.photo.x}, ${coreTransforms.photo.y}) rotate(${coreTransforms.photo.rotation}) scale(${coreTransforms.photo.scale})`}
+                  onPointerDown={(e) => startMove(e, { type: 'core', id: 'photo' })}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <image
@@ -1052,12 +1251,11 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </g>
               )}
 
-              {/* Dark/Festive readability scrim over Full-Bleed Background Photo */}
               {uploadedPhoto && photoFrameMode === 'background' && (
                 <rect
                   width={format.width}
                   height={format.height}
-                  fill={theme.bgStart}
+                  fill={customBgColor ?? theme.bgStart}
                   opacity={bgScrimOpacity / 100}
                   pointerEvents="none"
                 />
@@ -1078,7 +1276,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </g>
               )}
 
-              {/* Stitched festive inner border */}
+              {/* Stitched inner frame */}
               <rect
                 x={34}
                 y={34}
@@ -1092,8 +1290,8 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 pointerEvents="none"
               />
 
-              {/* Ambient Snow & Corner Pine Trees */}
-              {showDecor && (
+              {/* Ambient Snow & subtle corner pine silhouettes */}
+              {showSnow && (
                 <g className="card-snow" pointerEvents="none">
                   {snowflakes.map((s, i) => (
                     <circle
@@ -1107,7 +1305,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                   ))}
                   <g
                     transform={`translate(66, ${format.height - 210})`}
-                    opacity={themeId === 'postit-office' ? 0.25 : 0.42}
+                    opacity={themeId === 'postit-office' ? 0.22 : 0.34}
                   >
                     <path
                       d="M 54 165 L 48 128 L 10 134 L 44 84 L 18 90 L 56 32 L 72 8 Q 84 18 76 32 L 96 82 L 70 80 L 104 128 L 66 126 L 72 165 Z"
@@ -1117,7 +1315,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                   </g>
                   <g
                     transform={`translate(${format.width - 182}, ${format.height - 196}) scale(-1, 1) translate(-112, 0)`}
-                    opacity={themeId === 'postit-office' ? 0.25 : 0.42}
+                    opacity={themeId === 'postit-office' ? 0.22 : 0.34}
                   >
                     <path
                       d="M 54 155 L 48 122 L 16 128 L 46 80 L 22 86 L 56 32 L 72 10 L 92 78 L 68 76 L 98 122 L 66 120 L 70 155 Z"
@@ -1128,12 +1326,12 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </g>
               )}
 
-              {/* MOVABLE LAYER: Uploaded Photo (Polaroid / Rounded / Circle Sticker) */}
+              {/* MOVABLE CORE LAYER: Uploaded Photo Sticker */}
               {uploadedPhoto && photoFrameMode !== 'background' && (
                 <g
                   className="card-draggable-layer"
-                  transform={`translate(${transforms.photo.x}, ${transforms.photo.y}) rotate(${transforms.photo.rotation}) scale(${transforms.photo.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'photo')}
+                  transform={`translate(${coreTransforms.photo.x}, ${coreTransforms.photo.y}) rotate(${coreTransforms.photo.rotation}) scale(${coreTransforms.photo.scale})`}
+                  onPointerDown={(e) => startMove(e, { type: 'core', id: 'photo' })}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {photoFrameMode === 'polaroid' && (
@@ -1152,7 +1350,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                         width={photoBox.w}
                         height={photoBox.h}
                         rx={8}
-                        fill="#faf6ee"
+                        fill={resolvedPhotoFrame}
                       />
                       <image
                         href={uploadedPhoto.dataUrl}
@@ -1163,7 +1361,6 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                         preserveAspectRatio="xMidYMid slice"
                         clipPath="url(#photo-clip-polaroid)"
                       />
-                      {/* Festive masking tape holding Polaroid */}
                       <rect
                         x={-54}
                         y={-photoBox.h * 0.5 - 14}
@@ -1192,7 +1389,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                         width={photoBox.w}
                         height={photoBox.h}
                         rx={26}
-                        fill={theme.headlineColor}
+                        fill={resolvedPhotoFrame}
                       />
                       <image
                         href={uploadedPhoto.dataUrl}
@@ -1209,7 +1406,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                   {photoFrameMode === 'circle' && (
                     <>
                       <circle cx={6} cy={10} r={photoBox.w * 0.5} fill="rgba(0,0,0,0.36)" />
-                      <circle cx={0} cy={0} r={photoBox.w * 0.5} fill={theme.headlineColor} />
+                      <circle cx={0} cy={0} r={photoBox.w * 0.5} fill={resolvedPhotoFrame} />
                       <image
                         href={uploadedPhoto.dataUrl}
                         x={-photoBox.imgW * 0.5}
@@ -1224,31 +1421,11 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </g>
               )}
 
-              {/* MOVABLE LAYER: Dangling Ornaments */}
-              {showDecor && (
-                <g
-                  className="card-draggable-layer"
-                  transform={`translate(${transforms.ornaments.x}, ${transforms.ornaments.y}) rotate(${transforms.ornaments.rotation}) scale(${transforms.ornaments.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'ornaments')}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <rect x={-55} y={-90} width={115} height={180} fill="transparent" />
-                  <line x1={-28} y1={-88} x2={-28} y2={-8} stroke={theme.frameColor} strokeWidth={2.5} />
-                  <circle cx={-28} cy={18} r={28} fill={theme.decorAccent} />
-                  <ellipse cx={-36} cy={9} rx={6} ry={10} fill="rgba(255,255,255,0.3)" transform="rotate(-22 -36 9)" />
-                  <rect x={-37} y={-14} width={18} height={9} rx={2} fill={theme.decorSecondary} />
-
-                  <line x1={32} y1={-88} x2={32} y2={34} stroke={theme.frameColor} strokeWidth={2.5} />
-                  <circle cx={32} cy={54} r={21} fill={theme.decorSecondary} />
-                  <rect x={25} y={30} width={14} height={8} rx={2} fill={theme.decorAccent} />
-                </g>
-              )}
-
-              {/* MOVABLE LAYER: HAND-LETTERED HEADLINE */}
+              {/* MOVABLE CORE LAYER: HEADLINE */}
               <g
                 className="card-draggable-layer"
-                transform={`translate(${transforms.headline.x}, ${transforms.headline.y}) rotate(${transforms.headline.rotation}) scale(${transforms.headline.scale})`}
-                onPointerDown={(e) => startMoveLayer(e, 'headline')}
+                transform={`translate(${coreTransforms.headline.x}, ${coreTransforms.headline.y}) rotate(${coreTransforms.headline.rotation}) scale(${coreTransforms.headline.scale})`}
+                onPointerDown={(e) => startMove(e, { type: 'core', id: 'headline' })}
                 onClick={(e) => e.stopPropagation()}
               >
                 <rect
@@ -1269,8 +1446,8 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                         const gx = startX + g.x * headlineFit;
                         const gy = lineY + g.yOffset * headlineFit;
                         const fill = g.altColor
-                          ? theme.headlineAltColor
-                          : theme.headlineColor;
+                          ? resolvedHeadlineAlt
+                          : resolvedHeadlineColor;
                         return (
                           <g
                             key={g.key}
@@ -1292,12 +1469,12 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 })}
               </g>
 
-              {/* MOVABLE LAYER: SUBLINE */}
+              {/* MOVABLE CORE LAYER: SUBLINE */}
               {subline.trim().length > 0 && (
                 <g
                   className="card-draggable-layer"
-                  transform={`translate(${transforms.subline.x}, ${transforms.subline.y}) rotate(${transforms.subline.rotation}) scale(${transforms.subline.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'subline')}
+                  transform={`translate(${coreTransforms.subline.x}, ${coreTransforms.subline.y}) rotate(${coreTransforms.subline.rotation}) scale(${coreTransforms.subline.scale})`}
+                  onPointerDown={(e) => startMove(e, { type: 'core', id: 'subline' })}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <rect
@@ -1318,7 +1495,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                             key={g.key}
                             transform={`translate(${(startX + g.x * subFit).toFixed(1)}, ${(lineY + g.yOffset * subFit).toFixed(1)}) rotate(${g.rotDeg.toFixed(1)}) scale(${subScale.toFixed(4)})`}
                           >
-                            <path d={g.d} fill={theme.subColor} fillRule="nonzero" />
+                            <path d={g.d} fill={resolvedSubColor} fillRule="nonzero" />
                           </g>
                         ))}
                       </g>
@@ -1327,12 +1504,12 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </g>
               )}
 
-              {/* MOVABLE LAYER: SIGNATURE PILL */}
+              {/* MOVABLE CORE LAYER: SIGNATURE PILL */}
               {signature.trim().length > 0 && (
                 <g
                   className="card-draggable-layer"
-                  transform={`translate(${transforms.signature.x}, ${transforms.signature.y}) rotate(${transforms.signature.rotation}) scale(${transforms.signature.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'signature')}
+                  transform={`translate(${coreTransforms.signature.x}, ${coreTransforms.signature.y}) rotate(${coreTransforms.signature.rotation}) scale(${coreTransforms.signature.scale})`}
+                  onPointerDown={(e) => startMove(e, { type: 'core', id: 'signature' })}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <rect
@@ -1341,7 +1518,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                     width={sigPillW}
                     height={sigPillH}
                     rx={999}
-                    fill={theme.badgeBg}
+                    fill={resolvedSigBg}
                   />
                   {rawSig.lines.map((line, lIdx) => {
                     const startX = -(line.totalWidth * sigFit) * 0.5;
@@ -1354,7 +1531,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                             key={g.key}
                             transform={`translate(${(startX + g.x * sigFit).toFixed(1)}, ${lineY.toFixed(1)}) scale(${sigScale.toFixed(4)})`}
                           >
-                            <path d={g.d} fill={theme.badgeText} fillRule="nonzero" />
+                            <path d={g.d} fill={resolvedSigText} fillRule="nonzero" />
                           </g>
                         ))}
                       </g>
@@ -1363,75 +1540,23 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </g>
               )}
 
-              {/* MOVABLE LAYER: Mischievous Squinting Grinch Eyes (on top so you can place them anywhere!) */}
-              {showGrinchEyes && (
+              {/* DYNAMIC OPTIONAL STICKERS (rendered on top so hats/antlers/noses sit over photos!) */}
+              {stickers.map((st) => (
                 <g
+                  key={st.id}
                   className="card-draggable-layer"
-                  transform={`translate(${transforms.eyes.x}, ${transforms.eyes.y}) rotate(${transforms.eyes.rotation}) scale(${transforms.eyes.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'eyes')}
+                  transform={`translate(${st.x}, ${st.y}) rotate(${st.rotation}) scale(${st.scale})`}
+                  onPointerDown={(e) => startMove(e, { type: 'sticker', id: st.id })}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <rect x={-96} y={-48} width={192} height={100} fill="transparent" />
-                  <path
-                    d="M -84 -16 Q -48 -36 -14 -8"
-                    fill="none"
-                    stroke={theme.headlineColor}
-                    strokeWidth={8}
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M 14 -8 Q 48 -36 84 -16"
-                    fill="none"
-                    stroke={theme.headlineColor}
-                    strokeWidth={8}
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M -72 4 Q -44 -14 -18 8 Q -44 26 -72 4 Z"
-                    fill="#ffe84d"
-                    stroke={theme.shadowColor}
-                    strokeWidth={3}
-                  />
-                  <circle cx={-38} cy={6} r={7.5} fill="#d9201c" />
-                  <circle cx={-36} cy={4} r={2.8} fill="#14151a" />
-                  <path
-                    d="M 18 8 Q 44 -14 72 4 Q 44 26 18 8 Z"
-                    fill="#ffe84d"
-                    stroke={theme.shadowColor}
-                    strokeWidth={3}
-                  />
-                  <circle cx={38} cy={6} r={7.5} fill="#d9201c" />
-                  <circle cx={40} cy={4} r={2.8} fill="#14151a" />
-                  <path
-                    d="M -38 34 Q 0 50 42 29"
-                    fill="none"
-                    stroke={theme.headlineColor}
-                    strokeWidth={4.5}
-                    strokeLinecap="round"
-                    opacity={0.78}
+                  <StickerGraphic
+                    kind={st.kind}
+                    color={st.color}
+                    accentColor={st.accentColor}
+                    outlineColor={theme.shadowColor}
                   />
                 </g>
-              )}
-
-              {/* MOVABLE LAYER: Crooked Santa Hat (rendered on top so you can drag it onto anyone's head!) */}
-              {showDecor && (
-                <g
-                  className="card-draggable-layer"
-                  transform={`translate(${transforms.hat.x}, ${transforms.hat.y}) rotate(${transforms.hat.rotation}) scale(${transforms.hat.scale})`}
-                  onPointerDown={(e) => startMoveLayer(e, 'hat')}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <rect x={-64} y={-48} width={154} height={96} fill="transparent" />
-                  <path
-                    d="M -40 20 Q -12 -46 48 -32 Q 70 -26 76 -2 Q 46 -14 28 16 Z"
-                    fill="#e02e26"
-                    stroke={theme.shadowColor}
-                    strokeWidth={3}
-                  />
-                  <ellipse cx={-6} cy={20} rx={38} ry={13} fill="#fff8ee" />
-                  <circle cx={78} cy={2} r={13} fill="#fff8ee" />
-                </g>
-              )}
+              ))}
 
               {/* Subtle handcrafted footer credit */}
               <text
@@ -1448,21 +1573,242 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 HAND-LETTERED WITH {fontName.toUpperCase()}
               </text>
 
-              {/* Editor-only selection handles (automatically stripped on PNG/SVG export!) */}
-              {selectedLayer && renderSelectionChrome(selectedLayer)}
+              {/* Editor-only selection handles (stripped on export) */}
+              {selection && renderSelectionChrome(selection)}
             </svg>
           </div>
 
           <div className="card-canvas-tip">
             <Move size={13} />
             <span>
-              Kattints bármelyik elemre a kártyán (fotó, főcím, alcím, aláírás, Mikulás-sapka, Grincs-szempár) a mozgatáshoz! A <strong>narancs sarkokkal méretezhetsz</strong>, a <strong>zöld körrel forgathatsz</strong>.
+              Kattints bármelyik elemre a kártyán: húzással mozgathatod, a <strong>narancs sarkokkal</strong> méretezheted, a <strong>zöld körrel</strong> forgathatod, jobbra pedig <strong>átszínezheted</strong> (Delete: matrica törlése).
             </span>
           </div>
         </div>
 
         {/* Card Editor Controls */}
         <div className="card-controls-col">
+          {/* Selected Element Transform + Recolor Inspector */}
+          <div className="panel-card inspector-highlight-card">
+            <div className="panel-card-header">
+              <span className="section-eyebrow">
+                <Palette size={12} style={{ marginRight: 6 }} />
+                {selectedLabel ? `Kijelölt: ${selectedLabel}` : 'Kijelölt elem & Átszínezés'}
+              </span>
+              <button
+                type="button"
+                className="mini-btn"
+                onClick={resetAllLayouts}
+                title="Minden elem pozíciójának és színének visszaállítása"
+              >
+                <RotateCcw size={12} />
+                Reset
+              </button>
+            </div>
+
+            <div className="layer-quick-pills">
+              {(
+                [
+                  ...(uploadedPhoto ? (['photo'] as CoreLayerId[]) : []),
+                  'headline',
+                  'subline',
+                  'signature',
+                ] as CoreLayerId[]
+              ).map((cid) => (
+                <button
+                  key={cid}
+                  type="button"
+                  className={`pill-btn ${selection?.type === 'core' && selection.id === cid ? 'is-active' : ''}`}
+                  onClick={() => setSelection({ type: 'core', id: cid })}
+                >
+                  {CORE_LAYER_LABELS[cid]}
+                </button>
+              ))}
+              {stickers.map((st, idx) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  className={`pill-btn ${selection?.type === 'sticker' && selection.id === st.id ? 'is-active' : ''}`}
+                  onClick={() => setSelection({ type: 'sticker', id: st.id })}
+                >
+                  {STICKER_META_MAP[st.kind].emoji} {STICKER_META_MAP[st.kind].label}
+                  {stickers.filter((x) => x.kind === st.kind).length > 1 ? ` #${idx + 1}` : ''}
+                </button>
+              ))}
+            </div>
+
+            {selection && selectedTransform ? (
+              <div className="sliders-stack">
+                {/* Per-element Color Pickers */}
+                {selection.type === 'core' && selection.id === 'headline' && (
+                  <>
+                    <ColorSwatchPicker
+                      label="Főcím fő színe"
+                      value={resolvedHeadlineColor}
+                      onChange={(hex) => updateCoreColor('headline', 'primary', hex)}
+                    />
+                    <ColorSwatchPicker
+                      label="Főcím kiemelő (2.) színe"
+                      value={resolvedHeadlineAlt}
+                      onChange={(hex) => updateCoreColor('headline', 'secondary', hex)}
+                    />
+                  </>
+                )}
+
+                {selection.type === 'core' && selection.id === 'subline' && (
+                  <ColorSwatchPicker
+                    label="Alcím színe"
+                    value={resolvedSubColor}
+                    onChange={(hex) => updateCoreColor('subline', 'primary', hex)}
+                  />
+                )}
+
+                {selection.type === 'core' && selection.id === 'signature' && (
+                  <>
+                    <ColorSwatchPicker
+                      label="Aláírás címke háttere"
+                      value={resolvedSigBg}
+                      onChange={(hex) => updateCoreColor('signature', 'primary', hex)}
+                    />
+                    <ColorSwatchPicker
+                      label="Aláírás szöveg színe"
+                      value={resolvedSigText}
+                      onChange={(hex) => updateCoreColor('signature', 'secondary', hex)}
+                    />
+                  </>
+                )}
+
+                {selection.type === 'core' &&
+                  selection.id === 'photo' &&
+                  photoFrameMode !== 'background' && (
+                    <ColorSwatchPicker
+                      label="Fotó keret színe"
+                      value={resolvedPhotoFrame}
+                      onChange={(hex) => updateCoreColor('photo', 'primary', hex)}
+                    />
+                  )}
+
+                {selection.type === 'sticker' && selectedSticker && (
+                  <>
+                    <ColorSwatchPicker
+                      label="Matrica fő színe"
+                      value={selectedSticker.color}
+                      onChange={(hex) => updateSelectedStickerColor('color', hex)}
+                    />
+                    <ColorSwatchPicker
+                      label="Matrica díszítő színe"
+                      value={selectedSticker.accentColor}
+                      onChange={(hex) => updateSelectedStickerColor('accentColor', hex)}
+                    />
+                  </>
+                )}
+
+                <RangeSlider
+                  label="Méret (Scale)"
+                  value={Math.round(selectedTransform.scale * 100)}
+                  min={25}
+                  max={260}
+                  unit="%"
+                  onChange={(v) => patchTargetTransform(selection, { scale: v / 100 })}
+                />
+                <RangeSlider
+                  label="Forgatás"
+                  value={selectedTransform.rotation}
+                  min={-180}
+                  max={180}
+                  unit="°"
+                  onChange={(v) => patchTargetTransform(selection, { rotation: v })}
+                />
+
+                <div className="sketch-actions">
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() =>
+                      patchTargetTransform(selection, { x: Math.round(format.width * 0.5) })
+                    }
+                  >
+                    Középre
+                  </button>
+                  <button
+                    type="button"
+                    className="mini-btn"
+                    onClick={() => patchTargetTransform(selection, { rotation: 0, scale: 1 })}
+                  >
+                    100% / 0°
+                  </button>
+                  {selection.type === 'sticker' && (
+                    <>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={handleDuplicateSelectedSticker}
+                        title="Másolat készítése (pl. több Mikulás-sapka a fotóra)"
+                      >
+                        <CopyPlus size={12} />
+                        Duplikál
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={() => handleReorderSticker('up')}
+                        title="Réteg előrehozása"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn"
+                        onClick={() => handleReorderSticker('down')}
+                        title="Réteg hátraküldése"
+                      >
+                        <ArrowDown size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-btn danger-mini"
+                        onClick={handleDeleteSelectedSticker}
+                        title="Matrica törlése"
+                      >
+                        <Trash2 size={12} />
+                        Törlés
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="inspector-empty-note">
+                Kattints fent egy elemre vagy közvetlenül a kártyára a méret, forgatás és szín módosításához.
+              </p>
+            )}
+          </div>
+
+          {/* Optional Grinch & Christmas Stickers Catalog */}
+          <div className="panel-card">
+            <div className="panel-card-header">
+              <span className="section-eyebrow">
+                <Plus size={12} style={{ marginRight: 5 }} />
+                Opcionális elemek (+ rákattintva hozzáadja)
+              </span>
+            </div>
+            <div className="sticker-catalog-grid">
+              {STICKER_CATALOG.map((item) => (
+                <button
+                  key={item.kind}
+                  type="button"
+                  className="sticker-add-btn"
+                  onClick={() => handleAddSticker(item.kind)}
+                >
+                  <span className="sticker-emoji" aria-hidden="true">
+                    {item.emoji}
+                  </span>
+                  <span className="sticker-label">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Upload Own Photo Card */}
           <div className="panel-card">
             <div className="panel-card-header">
@@ -1494,7 +1840,9 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
               onClick={() => photoInputRef.current?.click()}
             >
               <ImagePlus size={16} />
-              {uploadedPhoto ? `Csere: ${uploadedPhoto.name}` : 'Saját fotó feltöltése (család / csapat / kutya)'}
+              {uploadedPhoto
+                ? `Csere: ${uploadedPhoto.name}`
+                : 'Saját fotó feltöltése (család / csapat / kutya)'}
             </button>
 
             {uploadedPhoto && (
@@ -1533,95 +1881,12 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
             )}
           </div>
 
-          {/* Selected Element Transform Inspector */}
-          <div className="panel-card">
-            <div className="panel-card-header">
-              <span className="section-eyebrow">
-                {selectedLayer
-                  ? `Kijelölt: ${LAYER_LABELS[selectedLayer]}`
-                  : 'Elemek mérete & helye'}
-              </span>
-              <button
-                type="button"
-                className="mini-btn"
-                onClick={resetAllLayouts}
-                title="Minden elem pozíciójának és méretének visszaállítása"
-              >
-                <RotateCcw size={12} />
-                Elrendezés reset
-              </button>
-            </div>
-
-            <div className="layer-quick-pills">
-              {(
-                [
-                  ...(uploadedPhoto ? (['photo'] as MovableLayerId[]) : []),
-                  'headline',
-                  'subline',
-                  'signature',
-                  ...(showGrinchEyes ? (['eyes'] as MovableLayerId[]) : []),
-                  ...(showDecor ? (['hat', 'ornaments'] as MovableLayerId[]) : []),
-                ] as MovableLayerId[]
-              ).map((lid) => (
-                <button
-                  key={lid}
-                  type="button"
-                  className={`pill-btn ${selectedLayer === lid ? 'is-active' : ''}`}
-                  onClick={() => setSelectedLayer(lid)}
-                >
-                  {LAYER_LABELS[lid]}
-                </button>
-              ))}
-            </div>
-
-            {selectedLayer && activeTransform && (
-              <div className="sliders-stack">
-                <RangeSlider
-                  label="Méret (Scale)"
-                  value={Math.round(activeTransform.scale * 100)}
-                  min={25}
-                  max={260}
-                  unit="%"
-                  onChange={(v) => updateSelectedTransform({ scale: v / 100 })}
-                />
-                <RangeSlider
-                  label="Forgatás"
-                  value={activeTransform.rotation}
-                  min={-45}
-                  max={45}
-                  unit="°"
-                  onChange={(v) => updateSelectedTransform({ rotation: v })}
-                />
-                <div className="sketch-actions">
-                  <button
-                    type="button"
-                    className="mini-btn"
-                    onClick={() =>
-                      updateSelectedTransform({ x: Math.round(format.width * 0.5) })
-                    }
-                  >
-                    Vízszintesen középre
-                  </button>
-                  <button
-                    type="button"
-                    className="mini-btn"
-                    onClick={() =>
-                      updateSelectedTransform({ rotation: 0, scale: 1 })
-                    }
-                  >
-                    100% / 0°
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Themes */}
+          {/* Themes + Custom Background Color */}
           <div className="panel-card">
             <div className="panel-card-header">
               <span className="section-eyebrow">
                 <Trees size={12} style={{ marginRight: 6 }} />
-                Grincses dizájn témák
+                Dizájn témák &amp; Háttérszín
               </span>
             </div>
             <div className="theme-cards-grid">
@@ -1629,8 +1894,8 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 <button
                   key={t.id}
                   type="button"
-                  className={`theme-tile ${themeId === t.id ? 'is-active' : ''}`}
-                  onClick={() => setThemeId(t.id)}
+                  className={`theme-tile ${themeId === t.id && !customBgColor ? 'is-active' : ''}`}
+                  onClick={() => handleSelectTheme(t.id)}
                 >
                   <span
                     className="theme-tile-swatch"
@@ -1643,6 +1908,11 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 </button>
               ))}
             </div>
+            <ColorSwatchPicker
+              label="Kártya háttérszín felülírása"
+              value={customBgColor ?? theme.bgStart}
+              onChange={(hex) => setCustomBgColor(hex)}
+            />
           </div>
 
           {/* Text Inputs */}
@@ -1730,18 +2000,10 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
             <label className="checkbox-row">
               <input
                 type="checkbox"
-                checked={showGrinchEyes}
-                onChange={(e) => setShowGrinchEyes(e.target.checked)}
+                checked={showSnow}
+                onChange={(e) => setShowSnow(e.target.checked)}
               />
-              <span>Huncut Grincs-szempár</span>
-            </label>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={showDecor}
-                onChange={(e) => setShowDecor(e.target.checked)}
-              />
-              <span>Mikulás-sapka, gömbök, fenyők és hóesés</span>
+              <span>Hóesés és sarok-fenyők a háttérben</span>
             </label>
             <label className="checkbox-row">
               <input
@@ -1749,7 +2011,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
                 checked={festiveColors}
                 onChange={(e) => setFestiveColors(e.target.checked)}
               />
-              <span>Ünnepi kétszínű kiemelés a betűkön</span>
+              <span>Ünnepi kétszínű kiemelés a főcímen</span>
             </label>
           </div>
 

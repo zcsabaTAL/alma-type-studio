@@ -1141,6 +1141,132 @@ input[type='range'].studio-range:focus-visible {
   gap: 5px;
 }
 
+.inspector-highlight-card {
+  border-color: rgba(94, 226, 160, 0.28);
+}
+
+.inspector-empty-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.color-picker-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 0 2px;
+}
+
+.color-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.color-hex-code {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-muted);
+}
+
+.swatch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.color-dot-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  padding: 0;
+  cursor: pointer;
+  transition: transform 110ms ease, border-color 110ms ease;
+}
+
+.color-dot-btn:hover {
+  transform: scale(1.12);
+}
+
+.color-dot-btn.is-selected {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.custom-color-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.native-color-input {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mini-btn.danger-mini {
+  border-color: rgba(255, 107, 107, 0.45);
+  color: #ffa3a3;
+}
+
+.mini-btn.danger-mini:hover {
+  background: rgba(255, 107, 107, 0.16);
+}
+
+.sticker-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sticker-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.sticker-add-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sticker-emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sticker-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .card-controls-col {
   display: flex;
   flex-direction: column;
