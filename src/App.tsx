@@ -4,11 +4,17 @@ import {
   ActiveTab,
   ConstructionParams,
   GlyphData,
+  SavedHandwriting,
   SketchAnalysisResult,
   TypesettingParams,
 } from './types/font';
 import { analyzeSketchImage, mapAnalysisToParams } from './engine/sketchAnalyzer';
 import { computeOpticalKerning } from './engine/kerningEngine';
+import {
+  createCompactThumb,
+  loadSavedHandwritings,
+  persistSavedHandwritings,
+} from './engine/handwritingStore';
 import {
   downloadFontFamilyZip,
   downloadSpecimenSvg,
@@ -66,6 +72,16 @@ export const App: React.FC = () => {
   const [sketchAnalysis, setSketchAnalysis] =
     useState<SketchAnalysisResult | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [savedHandwritings, setSavedHandwritings] = useState<SavedHandwriting[]>(
+    () => loadSavedHandwritings()
+  );
+  const [activeHandwritingId, setActiveHandwritingId] = useState<string | null>(
+    'builtin-alma-postit'
+  );
+
+  useEffect(() => {
+    persistSavedHandwritings(savedHandwritings);
+  }, [savedHandwritings]);
 
   // Automatically analyze bundled ALMA Post-it sketch on startup
   useEffect(() => {
@@ -205,6 +221,80 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleSelectHandwriting = (id: string) => {
+    const found = savedHandwritings.find((h) => h.id === id);
+    if (!found) return;
+    setActiveHandwritingId(found.id);
+    setFontName(found.name);
+    setParams({
+      ...found.params,
+      activePieces: { ...found.params.activePieces },
+    });
+    setOverrides(found.overrides ? { ...found.overrides } : {});
+    setKerningStrength(found.kerningStrength ?? 100);
+    setManualKerning(found.manualKerning ? { ...found.manualKerning } : {});
+    setExportStatus(`Betöltve: ${found.name}`);
+  };
+
+  const handleSaveNewHandwriting = async (name: string) => {
+    const thumb = sketchAnalysis?.imageUrl
+      ? await createCompactThumb(sketchAnalysis.imageUrl)
+      : undefined;
+    const newItem: SavedHandwriting = {
+      id: `hw-${Date.now()}`,
+      name,
+      params: {
+        ...params,
+        activePieces: { ...params.activePieces },
+      },
+      overrides: { ...overrides },
+      kerningStrength,
+      manualKerning: { ...manualKerning },
+      sketchThumbUrl: thumb,
+      createdAt: Date.now(),
+      isBuiltIn: false,
+    };
+    setSavedHandwritings((prev) => [...prev, newItem]);
+    setActiveHandwritingId(newItem.id);
+    setFontName(name);
+    setExportStatus(
+      `Elmentve: „${name}” — mostantól a Grincs Üdvözlőlap minden szövegéhez külön kiválasztható!`
+    );
+  };
+
+  const handleUpdateActiveHandwriting = async () => {
+    if (!activeHandwritingId) return;
+    const target = savedHandwritings.find((h) => h.id === activeHandwritingId);
+    if (!target || target.isBuiltIn) return;
+    const thumb = sketchAnalysis?.imageUrl
+      ? await createCompactThumb(sketchAnalysis.imageUrl)
+      : target.sketchThumbUrl;
+    setSavedHandwritings((prev) =>
+      prev.map((h) =>
+        h.id === activeHandwritingId
+          ? {
+              ...h,
+              name: fontName.trim() || h.name,
+              params: { ...params, activePieces: { ...params.activePieces } },
+              overrides: { ...overrides },
+              kerningStrength,
+              manualKerning: { ...manualKerning },
+              sketchThumbUrl: thumb,
+            }
+          : h
+      )
+    );
+    setExportStatus(`Frissítve: „${target.name}”`);
+  };
+
+  const handleDeleteHandwriting = (id: string) => {
+    setSavedHandwritings((prev) => prev.filter((h) => h.id !== id));
+    if (activeHandwritingId === id) {
+      setActiveHandwritingId(null);
+    }
+    setExportStatus('Kézírás törölve a mentett listából.');
+  };
+
   const handleExportSvg = () => {
     try {
       const fileName = downloadSpecimenSvg(
@@ -329,6 +419,7 @@ export const App: React.FC = () => {
               overrides={overrides}
               kerningStrength={kerningStrength}
               manualKerning={manualKerning}
+              savedHandwritings={savedHandwritings}
             />
           )}
         </div>
@@ -351,6 +442,12 @@ export const App: React.FC = () => {
           onExportSvg={handleExportSvg}
           exportStatus={exportStatus}
           onApplyPreset={handleApplyPreset}
+          savedHandwritings={savedHandwritings}
+          activeHandwritingId={activeHandwritingId}
+          onSelectHandwriting={handleSelectHandwriting}
+          onSaveNewHandwriting={handleSaveNewHandwriting}
+          onUpdateActiveHandwriting={handleUpdateActiveHandwriting}
+          onDeleteHandwriting={handleDeleteHandwriting}
         />
       </main>
     </div>

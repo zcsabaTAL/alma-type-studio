@@ -1288,6 +1288,119 @@ input[type='range'].studio-range:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* Saved Handwritings Library & Per-Block Font Selector */
+.handwriting-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.handwriting-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.handwriting-item.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.handwriting-select-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.handwriting-name {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.handwriting-meta {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.handwriting-del-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.handwriting-del-btn:hover {
+  color: #ff9c9c;
+  background: rgba(255, 107, 107, 0.14);
+}
+
+.handwriting-save-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.handwriting-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.text-block-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.text-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.studio-select {
+  max-width: 66%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .card-controls-col {
   display: flex;
   flex-direction: column;

@@ -17,9 +17,10 @@ import {
   Trees,
 } from 'lucide-react';
 import {
+  CardWeightBoost,
   ConstructionParams,
-  FontFamilyWeight,
   GlyphData,
+  SavedHandwriting,
 } from '../types/font';
 import { GLYPH_BLUEPRINTS } from '../engine/glyphBlueprints';
 import {
@@ -46,6 +47,7 @@ interface HolidayCardStudioProps {
   overrides: Record<string, GlyphData>;
   kerningStrength: number;
   manualKerning: Record<string, number>;
+  savedHandwritings: SavedHandwriting[];
 }
 
 type CardThemeId =
@@ -424,10 +426,14 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
   overrides,
   kerningStrength,
   manualKerning,
+  savedHandwritings,
 }) => {
   const [themeId, setThemeId] = useState<CardThemeId>('grinch-fur');
   const [formatId, setFormatId] = useState<CardFormatId>('postcard');
-  const [weight, setWeight] = useState<FontFamilyWeight>('molten');
+  const [weightBoost, setWeightBoost] = useState<CardWeightBoost>('original');
+  const [headlineFontId, setHeadlineFontId] = useState<string>('builtin-molten-grinch');
+  const [sublineFontId, setSublineFontId] = useState<string>('current');
+  const [signatureFontId, setSignatureFontId] = useState<string>('builtin-fine-pen');
   const [headline, setHeadline] = useState(MESSAGE_PRESETS[0].headline);
   const [subline, setSubline] = useState(MESSAGE_PRESETS[0].subline);
   const [signature, setSignature] = useState(MESSAGE_PRESETS[0].signature);
@@ -482,25 +488,60 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     coreColors.photo.primary ??
     (photoFrameMode === 'polaroid' ? '#faf6ee' : theme.headlineColor);
 
-  const variantData = useMemo(
-    () => deriveWeightVariantParams(params, weight),
-    [params, weight]
+  // Resolve an independent handwriting profile (params + overrides + kerning) per text block!
+  const resolveBlockFont = useCallback(
+    (fontId: string) => {
+      const saved =
+        fontId === 'current'
+          ? null
+          : savedHandwritings.find((h) => h.id === fontId) ?? null;
+
+      const baseParams = saved ? saved.params : params;
+      const baseOverrides = saved ? saved.overrides : overrides;
+      const baseKernStrength = saved ? saved.kerningStrength : kerningStrength;
+      const baseManualKern = saved ? saved.manualKerning : manualKerning;
+
+      if (weightBoost === 'original') {
+        const { kerningMap } = computeOpticalKerning(
+          baseParams,
+          baseOverrides,
+          baseKernStrength,
+          baseManualKern
+        );
+        return {
+          params: baseParams,
+          overrides: baseOverrides,
+          kerningMap,
+        };
+      }
+
+      const derived = deriveWeightVariantParams(baseParams, weightBoost);
+      const { kerningMap } = computeOpticalKerning(
+        derived.params,
+        {},
+        baseKernStrength,
+        baseManualKern
+      );
+      return {
+        params: derived.params,
+        overrides: {} as Record<string, GlyphData>,
+        kerningMap,
+      };
+    },
+    [kerningStrength, manualKerning, overrides, params, savedHandwritings, weightBoost]
   );
 
-  const variantOverrides = useMemo(
-    () => (weight === 'regular' ? overrides : {}),
-    [overrides, weight]
+  const headlineFont = useMemo(
+    () => resolveBlockFont(headlineFontId),
+    [headlineFontId, resolveBlockFont]
   );
-
-  const { kerningMap } = useMemo(
-    () =>
-      computeOpticalKerning(
-        variantData.params,
-        variantOverrides,
-        kerningStrength,
-        manualKerning
-      ),
-    [variantData.params, variantOverrides, kerningStrength, manualKerning]
+  const sublineFont = useMemo(
+    () => resolveBlockFont(sublineFontId),
+    [resolveBlockFont, sublineFontId]
+  );
+  const signatureFont = useMemo(
+    () => resolveBlockFont(signatureFontId),
+    [resolveBlockFont, signatureFontId]
   );
 
   const handleSelectTheme = (nextId: CardThemeId) => {
@@ -632,13 +673,18 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleDeleteSelectedSticker, selection]);
 
-  const layoutCenteredBlock = useMemo(() => {
-    return (
+  const layoutCenteredBlock = useCallback(
+    (
       text: string,
       fontSize: number,
       lineHeightMult: number,
       chaosAmount: number,
-      allowAltColors: boolean
+      allowAltColors: boolean,
+      blockFont: {
+        params: ConstructionParams;
+        overrides: Record<string, GlyphData>;
+        kerningMap: Record<string, number>;
+      }
     ): {
       lines: PositionedLine[];
       totalHeight: number;
@@ -665,7 +711,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
 
         chars.forEach((ch, cIdx) => {
           const glyph =
-            variantOverrides[ch] ?? generateProceduralGlyph(ch, variantData.params);
+            blockFont.overrides[ch] ?? generateProceduralGlyph(ch, blockFont.params);
           const d =
             glyph.contours.length > 0 ? glyphToSvgPath(glyph.contours, ASCENDER) : '';
           const seed = (lIdx + 1) * 131 + (cIdx + 1) * 29 + (ch.codePointAt(0) ?? 65);
@@ -686,7 +732,7 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
           }
 
           const nextCh = chars[cIdx + 1];
-          const kern = nextCh ? kerningMap[`${ch}${nextCh}`] ?? 0 : 0;
+          const kern = nextCh ? blockFont.kerningMap[`${ch}${nextCh}`] ?? 0 : 0;
           cursorX += (glyph.advanceWidth + kern + 10) * scale;
         });
 
@@ -706,13 +752,22 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
         boxW: Math.max(120, maxW + 32),
         boxH: Math.max(70, totalHeight + 24),
       };
-    };
-  }, [kerningMap, variantData.params, variantOverrides]);
+    },
+    []
+  );
 
   const safeMaxW = format.width - 170;
   const rawHeadline = useMemo(
-    () => layoutCenteredBlock(headline, headlineSize, 1.14, grinchChaos, festiveColors),
-    [layoutCenteredBlock, headline, headlineSize, grinchChaos, festiveColors]
+    () =>
+      layoutCenteredBlock(
+        headline,
+        headlineSize,
+        1.14,
+        grinchChaos,
+        festiveColors,
+        headlineFont
+      ),
+    [layoutCenteredBlock, headline, headlineSize, grinchChaos, festiveColors, headlineFont]
   );
   const headlineFit =
     rawHeadline.maxLineWidth > safeMaxW && rawHeadline.maxLineWidth > 0
@@ -726,8 +781,16 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
 
   const subSize = Math.round(format.width * 0.044);
   const rawSub = useMemo(
-    () => layoutCenteredBlock(subline, subSize, 1.18, grinchChaos * 0.35, false),
-    [layoutCenteredBlock, subline, subSize, grinchChaos]
+    () =>
+      layoutCenteredBlock(
+        subline,
+        subSize,
+        1.18,
+        grinchChaos * 0.35,
+        false,
+        sublineFont
+      ),
+    [layoutCenteredBlock, subline, subSize, grinchChaos, sublineFont]
   );
   const subFit =
     rawSub.maxLineWidth > safeMaxW && rawSub.maxLineWidth > 0
@@ -741,8 +804,16 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
 
   const sigSize = Math.round(format.width * 0.036);
   const rawSig = useMemo(
-    () => layoutCenteredBlock(signature, sigSize, 1.15, grinchChaos * 0.25, false),
-    [layoutCenteredBlock, signature, sigSize, grinchChaos]
+    () =>
+      layoutCenteredBlock(
+        signature,
+        sigSize,
+        1.15,
+        grinchChaos * 0.25,
+        false,
+        signatureFont
+      ),
+    [layoutCenteredBlock, signature, sigSize, grinchChaos, signatureFont]
   );
   const sigFit =
     rawSig.maxLineWidth > safeMaxW && rawSig.maxLineWidth > 0
@@ -1639,6 +1710,40 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
 
             {selection && selectedTransform ? (
               <div className="sliders-stack">
+                {/* Quick Handwriting Selector when a text layer is selected */}
+                {selection.type === 'core' &&
+                  (selection.id === 'headline' ||
+                    selection.id === 'subline' ||
+                    selection.id === 'signature') && (
+                    <div className="text-block-header">
+                      <span className="font-name-label">Kézírás ehhez a szöveghez</span>
+                      <select
+                        className="studio-select"
+                        value={
+                          selection.id === 'headline'
+                            ? headlineFontId
+                            : selection.id === 'subline'
+                              ? sublineFontId
+                              : signatureFontId
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (selection.id === 'headline') setHeadlineFontId(v);
+                          else if (selection.id === 'subline') setSublineFontId(v);
+                          else setSignatureFontId(v);
+                        }}
+                        aria-label="Kijelölt szöveg kézírása"
+                      >
+                        <option value="current">Aktuális ({fontName})</option>
+                        {savedHandwritings.map((hw) => (
+                          <option key={hw.id} value={hw.id}>
+                            {hw.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                 {/* Per-element Color Pickers */}
                 {selection.type === 'core' && selection.id === 'headline' && (
                   <>
@@ -1915,44 +2020,95 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
             />
           </div>
 
-          {/* Text Inputs */}
+          {/* Text Inputs with Per-Block Handwriting Selectors */}
           <div className="panel-card">
             <div className="panel-card-header">
-              <span className="section-eyebrow">Képeslap szövege</span>
+              <span className="section-eyebrow">Képeslap szövege &amp; Kézírás választás</span>
             </div>
 
-            <label className="font-name-label" htmlFor="card-headline">
-              Főcím (Enterrel több sorba törhető)
-            </label>
-            <textarea
-              id="card-headline"
-              className="card-textarea"
-              rows={2}
-              value={headline}
-              onChange={(e) => setHeadline(e.target.value)}
-            />
+            <div className="text-block-field">
+              <div className="text-block-header">
+                <label className="font-name-label" htmlFor="card-headline">
+                  Főcím
+                </label>
+                <select
+                  className="studio-select"
+                  value={headlineFontId}
+                  onChange={(e) => setHeadlineFontId(e.target.value)}
+                  aria-label="Főcím kézírása"
+                >
+                  <option value="current">Aktuális ({fontName})</option>
+                  {savedHandwritings.map((hw) => (
+                    <option key={hw.id} value={hw.id}>
+                      {hw.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <textarea
+                id="card-headline"
+                className="card-textarea"
+                rows={2}
+                value={headline}
+                onChange={(e) => setHeadline(e.target.value)}
+              />
+            </div>
 
-            <label className="font-name-label" htmlFor="card-subline">
-              Alcím / Poén
-            </label>
-            <input
-              id="card-subline"
-              type="text"
-              className="font-name-input"
-              value={subline}
-              onChange={(e) => setSubline(e.target.value)}
-            />
+            <div className="text-block-field">
+              <div className="text-block-header">
+                <label className="font-name-label" htmlFor="card-subline">
+                  Alcím / Poén
+                </label>
+                <select
+                  className="studio-select"
+                  value={sublineFontId}
+                  onChange={(e) => setSublineFontId(e.target.value)}
+                  aria-label="Alcím kézírása"
+                >
+                  <option value="current">Aktuális ({fontName})</option>
+                  {savedHandwritings.map((hw) => (
+                    <option key={hw.id} value={hw.id}>
+                      {hw.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                id="card-subline"
+                type="text"
+                className="font-name-input"
+                value={subline}
+                onChange={(e) => setSubline(e.target.value)}
+              />
+            </div>
 
-            <label className="font-name-label" htmlFor="card-signature">
-              Aláírás / Feladó
-            </label>
-            <input
-              id="card-signature"
-              type="text"
-              className="font-name-input"
-              value={signature}
-              onChange={(e) => setSignature(e.target.value)}
-            />
+            <div className="text-block-field">
+              <div className="text-block-header">
+                <label className="font-name-label" htmlFor="card-signature">
+                  Aláírás / Feladó
+                </label>
+                <select
+                  className="studio-select"
+                  value={signatureFontId}
+                  onChange={(e) => setSignatureFontId(e.target.value)}
+                  aria-label="Aláírás kézírása"
+                >
+                  <option value="current">Aktuális ({fontName})</option>
+                  {savedHandwritings.map((hw) => (
+                    <option key={hw.id} value={hw.id}>
+                      {hw.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                id="card-signature"
+                type="text"
+                className="font-name-input"
+                value={signature}
+                onChange={(e) => setSignature(e.target.value)}
+              />
+            </div>
           </div>
 
           {/* Font & Grinch Vibe */}
@@ -1961,19 +2117,19 @@ export const HolidayCardStudio: React.FC<HolidayCardStudioProps> = ({
               <span className="section-eyebrow">Betű &amp; Grincs-hangulat</span>
             </div>
 
-            <div className="sample-pills" role="group" aria-label="Kártya betűsúly">
+            <div className="sample-pills" role="group" aria-label="Kártya súly-módosító">
               {(
                 [
-                  { id: 'regular', label: 'Regular' },
-                  { id: 'bold', label: 'Bold' },
-                  { id: 'molten', label: 'Molten Grincs' },
+                  { id: 'original', label: 'Eredeti kézírás' },
+                  { id: 'bold', label: 'Bold +' },
+                  { id: 'molten', label: 'Molten +' },
                 ] as const
               ).map((w) => (
                 <button
                   key={w.id}
                   type="button"
-                  className={`pill-btn ${weight === w.id ? 'is-active' : ''}`}
-                  onClick={() => setWeight(w.id)}
+                  className={`pill-btn ${weightBoost === w.id ? 'is-active' : ''}`}
+                  onClick={() => setWeightBoost(w.id)}
                 >
                   {w.label}
                 </button>

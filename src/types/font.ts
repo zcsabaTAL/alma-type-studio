@@ -68,5 +68,18 @@ export interface SketchAnalysisResult {
   tracePreviewDataUrl: string;
 }
 
+export interface SavedHandwriting {
+  id: string;
+  name: string;
+  params: ConstructionParams;
+  overrides: Record<string, GlyphData>;
+  kerningStrength: number;
+  manualKerning: Record<string, number>;
+  sketchThumbUrl?: string;
+  createdAt: number;
+  isBuiltIn?: boolean;
+}
+
 export type ActiveTab = 'studio' | 'glyphs' | 'test' | 'cards';
 export type FontFamilyWeight = 'regular' | 'bold' | 'molten';
+export type CardWeightBoost = 'original' | 'bold' | 'molten';

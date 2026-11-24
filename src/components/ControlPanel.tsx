@@ -1,17 +1,21 @@
 import React, { useRef, useState } from 'react';
 import {
+  BookmarkPlus,
   Download,
   FileCode2,
   Grid2x2,
   ImagePlus,
   Layers,
   Package,
+  RefreshCw,
   ScanEye,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import {
   ConstructionParams,
   PieceId,
+  SavedHandwriting,
   SketchAnalysisResult,
   TypesettingParams,
 } from '../types/font';
@@ -36,6 +40,12 @@ interface ControlPanelProps {
   onExportSvg: () => void;
   exportStatus: string | null;
   onApplyPreset: (presetId: string) => void;
+  savedHandwritings: SavedHandwriting[];
+  activeHandwritingId: string | null;
+  onSelectHandwriting: (id: string) => void;
+  onSaveNewHandwriting: (name: string) => void;
+  onUpdateActiveHandwriting: () => void;
+  onDeleteHandwriting: (id: string) => void;
 }
 
 const PRESETS = [
@@ -63,11 +73,28 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onExportSvg,
   exportStatus,
   onApplyPreset,
+  savedHandwritings,
+  activeHandwritingId,
+  onSelectHandwriting,
+  onSaveNewHandwriting,
+  onUpdateActiveHandwriting,
+  onDeleteHandwriting,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [showMaskPreview, setShowMaskPreview] = useState(false);
+  const [newHandwritingName, setNewHandwritingName] = useState('');
 
   const activeCount = EXTRACTED_PIECES.filter((p) => params.activePieces[p.id]).length;
+
+  const handleSaveSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newHandwritingName.trim();
+    if (!trimmed) return;
+    onSaveNewHandwriting(trimmed);
+    setNewHandwritingName('');
+  };
+
+  const activeSaved = savedHandwritings.find((h) => h.id === activeHandwritingId) ?? null;
 
   const updateParam = <K extends keyof ConstructionParams>(
     key: K,
@@ -96,6 +123,80 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
   return (
     <aside className="control-panel" aria-label="Tipográfiai vezérlőpanel">
+      {/* Saved Handwritings Library */}
+      <section className="panel-card">
+        <div className="panel-card-header">
+          <span className="section-eyebrow">Mentett kézírások ({savedHandwritings.length})</span>
+          {activeSaved && !activeSaved.isBuiltIn && (
+            <button
+              type="button"
+              className="mini-btn accent"
+              onClick={onUpdateActiveHandwriting}
+              title={`Jelenlegi beállítások és Bézier-javítások mentése ebbe: ${activeSaved.name}`}
+            >
+              <RefreshCw size={12} />
+              Frissítés
+            </button>
+          )}
+        </div>
+
+        <div className="handwriting-list" role="list" aria-label="Elmentett kézírások">
+          {savedHandwritings.map((hw) => {
+            const isActive = hw.id === activeHandwritingId;
+            const editCount = Object.keys(hw.overrides ?? {}).length;
+            return (
+              <div
+                key={hw.id}
+                role="listitem"
+                className={`handwriting-item ${isActive ? 'is-active' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="handwriting-select-btn"
+                  onClick={() => onSelectHandwriting(hw.id)}
+                >
+                  <span className="handwriting-name">{hw.name}</span>
+                  <span className="handwriting-meta">
+                    {hw.params.strokeWeight}u · melt {hw.params.jointMelt}%
+                    {editCount > 0 ? ` · ${editCount} Bézier` : ''}
+                  </span>
+                </button>
+                {!hw.isBuiltIn && (
+                  <button
+                    type="button"
+                    className="handwriting-del-btn"
+                    onClick={() => onDeleteHandwriting(hw.id)}
+                    title={`„${hw.name}” törlése`}
+                    aria-label={`${hw.name} törlése`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <form className="handwriting-save-form" onSubmit={handleSaveSubmit}>
+          <input
+            type="text"
+            className="handwriting-name-input"
+            value={newHandwritingName}
+            onChange={(e) => setNewHandwritingName(e.target.value)}
+            placeholder="Új kézírás neve (pl. Zoli, Anna, Gyerekek)..."
+            aria-label="Új kézírás neve"
+          />
+          <button
+            type="submit"
+            className="mini-btn accent"
+            disabled={newHandwritingName.trim().length === 0}
+          >
+            <BookmarkPlus size={13} />
+            Mentés
+          </button>
+        </form>
+      </section>
+
       {/* Reference Sketch + Extracted 6 Pieces */}
       <section className="panel-card">
         <div className="panel-card-header">
